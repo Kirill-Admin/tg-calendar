@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Запись к мастеру</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+
+    <style>
+        :root {
+            --primary: #d35400; --accent: #f39c12; --bg: #fff5e1; --text: #2c3e50; --card-bg: rgba(255,255,255,0.92);
+        }
+        body.theme-autumn { --primary: #d35400; --accent: #e67e22; --bg: #fdf6ec; --text: #3e2723; }
+        body.theme-winter { --primary: #1976d2; --accent: #0288d1; --bg: #e3f2fd; --text: #0d47a1; }
+        body.theme-summer { --primary: #2e7d32; --accent: #fbc02d; --bg: #f1f8e9; --text: #1b5e20; }
+        body.theme-spring { --primary: #7b1fa2; --accent: #f06292; --bg: #fce4ec; --text: #4a148c; }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden;
+            transition: background 0.5s ease; position: relative;
+        }
+
+        #effects-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+
+        .garland {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 26px;
+            background: radial-gradient(circle, #ff1744 4px, transparent 5px),
+                        radial-gradient(circle, #00e5ff 4px, transparent 5px),
+                        radial-gradient(circle, #ffea00 4px, transparent 5px);
+            background-size: 32px 24px; z-index: 100;
+        }
+        body.theme-winter .garland { display: block; animation: lights 1.2s infinite alternate; }
+        @keyframes lights { 0% { opacity: 0.4; } 100% { opacity: 1; } }
+
+        .container { position: relative; z-index: 10; max-width: 500px; margin: 0 auto; padding: 20px 16px; }
+
+        .header {
+            text-align: center; padding: 20px; border-radius: 22px; background: var(--card-bg);
+            border: 2px solid var(--primary); box-shadow: 0 8px 25px rgba(0,0,0,0.05); margin-bottom: 20px;
+        }
+        .header h1 { font-size: 22px; font-weight: 900; color: var(--primary); margin-bottom: 4px; }
+        .header p { font-size: 13px; opacity: 0.8; }
+
+        .date-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 12px; }
+        .date-card {
+            background: var(--card-bg); border-radius: 18px; padding: 14px 6px; text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.04); border: 2px solid transparent; cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .date-card:active { transform: scale(0.95); }
+        .date-card.available { border-color: #27ae60; background: rgba(39, 174, 96, 0.12); }
+        .date-card.booked { border-color: #e74c3c; background: rgba(231, 76, 60, 0.08); opacity: 0.6; }
+        .date-num { font-size: 26px; font-weight: 900; }
+        .date-month { font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--accent); margin-top: 2px; }
+        .date-status { font-size: 9px; font-weight: 900; margin-top: 5px; }
+
+        .empty-msg { text-align: center; padding: 40px 10px; font-size: 15px; opacity: 0.7; font-weight: 600; }
+    </style>
+</head>
+<body class="theme-autumn">
+
+    <div class="garland"></div>
+    <canvas id="effects-canvas"></canvas>
+
+    <div class="container">
+        <div class="header">
+            <h1 id="headerTitle">🍂 Запись к мастеру</h1>
+            <p>Выберите свободную дату для бронирования</p>
+        </div>
+
+        <div class="date-grid" id="dateGrid"></div>
+        <div id="emptyMsg" class="empty-msg">Свободных дат на ближайшее время нет...</div>
+    </div>
+
+    <script>
+        const tg = window.Telegram?.WebApp;
+        if (tg) tg.expand();
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDi9QEO-IUp4fnzDYiha7sbFeD4PcTqDqw",
+            authDomain: "calendary-4adec.firebaseapp.com",
+            databaseURL: "https://calendary-4adec-default-rtdb.firebaseio.com",
+            projectId: "calendary-4adec",
+            storageBucket: "calendary-4adec.firebasestorage.app",
+            messagingSenderId: "895830423725",
+            appId: "1:895830423725:web:028d05127ac12822b1ee24"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let currentSeason = 'autumn';
+        let slotsList = {};
+
+        // 1. Слушаем смену сезона из Telegram-бота
+        db.ref('settings/season').on('value', snap => {
+            currentSeason = snap.val() || 'autumn';
+            document.body.className = 'theme-' + currentSeason;
+            const titles = { autumn: '🍂 Осенняя Запись', winter: '🎄 Зимняя Запись', summer: '☀️ Летняя Запись', spring: '🌸 Весенняя Запись' };
+            document.getElementById('headerTitle').innerText = titles[currentSeason] || 'Запись';
+            initParticles();
+        });
+
+        // 2. Слушаем добавление/удаление дат из Telegram-бота
+        db.ref('slots').on('value', snap => {
+            slotsList = snap.val() || {};
+            render();
+        });
+
+        function render() {
+            const grid = document.getElementById('dateGrid');
+            grid.innerHTML = '';
+            const today = new Date().toISOString().split('T')[0];
+
+            const sortedKeys = Object.keys(slotsList)
+                .filter(k => slotsList[k].date >= today)
+                .sort((a, b) => new Date(slotsList[a].date) - new Date(slotsList[b].date));
+
+            document.getElementById('emptyMsg').style.display = sortedKeys.length === 0 ? 'block' : 'none';
+
+            sortedKeys.forEach(key => {
+                const item = slotsList[key];
+                const d = new Date(item.date);
+                const card = document.createElement('div');
+                card.className = `date-card ${item.status === 'free' ? 'available' : 'booked'}`;
+                card.innerHTML = `
+                    <div class="date-num">${d.getDate()}</div>
+                    <div class="date-month">${d.toLocaleString('ru', { month: 'short' })}</div>
+                    <div class="date-status">${item.status === 'free' ? 'СВОБОДНО' : 'ЗАНЯТО'}</div>
+                `;
+
+                card.onclick = () => {
+                    if (item.status === 'free') {
+                        const humanDate = new Date(item.date).toLocaleDateString('ru');
+                        if (tg?.MainButton) {
+                            tg.MainButton.setText(`Записаться на ${humanDate}`);
+                            tg.MainButton.show();
+                            tg.MainButton.onClick(() => {
+                                tg.sendData(JSON.stringify({ date: item.date }));
+                                tg.close();
+                            });
+                        } else {
+                            alert(`Вы выбрали свободную дату: ${humanDate}`);
+                        }
+                    } else {
+                        alert("Эта дата уже занята. Выберите другую свободную дату.");
+                    }
+                };
+                grid.appendChild(card);
+            });
+        }
+
+        // 3. Анимация летающих листьев / снега
+        const canvas = document.getElementById('effects-canvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+        function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+        window.addEventListener('resize', resize);
+        resize();
+
+        const SYMBOLS = { autumn: ['🍂', '🍁', '🍃'], winter: ['❄️', '❅', '✨'], summer: ['☀️', '🌻', '🦋'], spring: ['🌸', '🌺', '🌱'] };
+
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < 25; i++) {
+                particles.push({
+                    x: Math.random() * canvas.width, y: Math.random() * canvas.height,
+                    size: Math.random() * 14 + 14, speedY: Math.random() * 1.2 + 0.6,
+                    char: SYMBOLS[currentSeason][Math.floor(Math.random() * 3)]
+                });
+            }
+        }
+        function drawParticles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            particles.forEach(p => {
+                ctx.font = `${p.size}px serif`;
+                ctx.fillText(p.char, p.x, p.y);
+                p.y += p.speedY;
+                if (p.y > canvas.height + 20) { p.y = -20; p.x = Math.random() * canvas.width; }
+            });
+            requestAnimationFrame(drawParticles);
+        }
+        initParticles();
+        drawParticles();
+    </script>
+</body>
+</html>
